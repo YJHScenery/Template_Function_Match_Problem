@@ -1,0 +1,186 @@
+# 通过重载模拟函数的部分特例化
+
+C++不允许函数的模板部分特例化，意思是，不能使用像部分特例化类模板那样的语法来部分特例化一个函数模板。相反，我们可以用另一个模板重载函数来模拟这种行为。
+
+例如我们需要编写一个比较函数，如下所示：
+
+```C++
+template<typename T, typename OutStream>
+void print(T val, OutStream& out)
+{
+    out << val << std::endl;
+}
+```
+
+现在我们想要编写这个函数对指针类型的特例化。显然传入指针类型时，上述已经完成的函数不能完成我们想要的效果，因为它比较的是指针本身而是指针指向的值。
+
+下面的代码是错误的：
+
+```C++
+template<typename T, typename OutStream>
+void print<T*, OutStream>(T* val, OutStream& out)
+{
+    out << *val << std::endl;
+}
+```
+
+要实现这类特例化，需要使用重载的语法。这种重载的语法和“部分特例化”的语法差距极为微妙，甚至更加简洁了。
+
+```C++
+template<typename T, typename OutStream>
+void print(T* val, OutStream& out)
+{
+    out << (*val) << std::endl;
+}
+```
+
+此时下面的使用示例，都能正确地输出 `114514`
+
+```C++
+int main()
+{
+    int a = 114514;
+    int* ptr = &a;
+    print(a, std::cout);
+    print(ptr, std::cout);
+}
+```
+
+编译器总是会选择更加具体的版本。如果非模板化的版本和模板的实例化等价，则更偏向于选择非模板化的版本。
+
+这里存在一些极其晦涩的问题。涉及到 “具体” 的评价标准。
+
+仍然是上面的例子，我们考虑创建下述的四个指针实例：
+
+```C++
+int a = 114514;
+int* ptr = &a;
+const int* constPtr = &a;
+int* const ptrConst = &a;
+const int* const constPtrConst = &a;
+```
+
+此时的指针特例化版本的函数原型保持不变。则对这四个指针同时调用 `print`，四者都能正确匹配到指针版本。
+
+但如果我们将指针特例化函数原型修改：
+
+```C++
+template<typename T, typename OutStream>
+void print(const T* val, OutStream& out)
+{
+    out << (*val) << std::endl;
+}
+```
+
+诡异的事情来了，输出结果为：
+
+```bash
+000000EFAB0FFBD4
+114514
+000000EFAB0FFBD4
+114514
+```
+
+此时，`int*` 类型与 `int* const` 类型被匹配到了非特例化版本
+
+我们换一种函数原型：
+
+```C++
+template<typename T, typename OutStream>
+void print(T* const val, OutStream& out)
+{
+    out << (*val) << std::endl;
+}
+```
+
+此时的输出结果为：
+
+```bash
+114514
+114514
+114514
+114514
+```
+
+全部正确匹配！
+
+别高兴太早，我们继续改：
+
+```C++
+template<typename T, typename OutStream>
+void print(const T* const val, OutStream& out)
+{
+    out << (*val) << std::endl;
+}
+```
+
+好的这次的输出结果是：
+
+```bash
+000000851497FB24
+114514
+000000851497FB24
+114514
+```
+
+平凡的 `int*` 与不是很平凡的 `int* const` 再次错误匹配
+
+如果我们将源值 `a` 设置为 `const` 的，此时显然 `int*` 与 `int* const`是不能指向它了。剩下的两个指针是能够正确匹配指针版本的。
+
+下面我们继续探讨这个问题，此时我们将原始模板中的 `T` 替换为 `const T`：
+
+```C++
+template<typename T, typename OutStream>
+void print(const T val, OutStream& out)
+{
+    out << val << std::endl;
+}
+```
+
+我们在部分特化重载版本的模板代码中，依次使用 `T*`，`const T*`，`T* const`，`const T* const`，结果依次为：
+
+```bash
+# T* 版本
+114514
+114514
+114514
+114514
+```
+
+```bash
+# const T* 版本
+000000103651FAA4
+114514
+000000103651FAA4
+114514
+```
+
+```bash
+# T* const 版本
+114514
+114514
+114514
+114514
+```
+
+```bash
+# const T* const 版本
+000000920837F584
+114514
+000000920837F584
+114514
+```
+
+可见在原始模板中是否使用 `const` 似乎不影响对特例化的匹配情况。
+
+以上实验在GCC， Clang 中编译效果相同。
+
+总结，可以归为如下的表格：
+
+| 指针实例类型（右）、特化模板类型（下） | `T*` | `const T*` | `T* const` | `const T* const` |
+| -------------------------------------- | ---- | ---------- | ---------- | ---------------- |
+| `T*`                                   | ✅    | ✅          | ✅          | ✅                |
+| `const T*`                             | ❌    | ✅          | ❌          | ✅                |
+| `T* const`                             | ✅    | ✅          | ✅          | ✅                |
+| `const T* const`                       | ❌    | ✅          | ❌          | ✅                |
+
